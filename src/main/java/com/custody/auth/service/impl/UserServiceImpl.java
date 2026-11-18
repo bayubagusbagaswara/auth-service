@@ -6,6 +6,7 @@ import com.custody.auth.entity.UserEntity;
 import com.custody.auth.exception.ResourceNotFoundException;
 import com.custody.auth.repository.MenuAccessRepository;
 import com.custody.auth.repository.UserRepository;
+import com.custody.auth.service.MenuAccessService;
 import com.custody.auth.service.UserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -19,13 +20,13 @@ public class UserServiceImpl implements UserService {
 
     private final UserRepository userRepository;
 
-    private final MenuAccessRepository menuAccessRepository;
+    private final MenuAccessService menuAccessService;
 
     @Override
     @Transactional(readOnly = true)
     public UserResponse getUserByUsername(String username) {
 
-        // Find user by username.
+        // Find user in CSAUSERS.
         UserEntity user = userRepository.findByUsername(username)
                 .orElseThrow(() ->
                         new ResourceNotFoundException(
@@ -33,23 +34,13 @@ public class UserServiceImpl implements UserService {
                         )
                 );
 
-        // Retrieve the user's access group.
-        String groupName = user.getGroupLevel();
+        // Retrieve accessible menus based on group level.
+        List<String> menus = menuAccessService.getMenusByGroupName(user.getGroupLevel());
 
-        // Retrieve menu permissions based on the user's group.
-        List<String> menus = groupName == null || groupName.isBlank()
-                ? List.of()
-                : menuAccessRepository
-                .findByGroupNameOrderByMenuNameAsc(groupName)
-                .stream()
-                .map(MenuAccessEntity::getMenuName)
-                .distinct()
-                .toList();
-
-        // Map user entity and permissions to response DTO.
+        // Convert user information to response DTO.
         return new UserResponse(
                 user.getUsername(),
-                user.getSurename(),
+                user.getSurename(), // Mapped to fullName.
                 user.getBranchName(),
                 user.getStatus(),
                 user.getGroupLevel(),
