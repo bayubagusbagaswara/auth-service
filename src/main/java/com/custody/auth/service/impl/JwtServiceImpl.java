@@ -11,6 +11,7 @@ import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -21,12 +22,10 @@ public class JwtServiceImpl implements JwtService {
 
     private final JwtEncoder jwtEncoder;
     private final JwtProperties jwtProperties;
+    private final Clock clock;
 
     /**
-     * Generate a JWT access token.
-     *
-     * Must only be invoked after successful
-     * authentication and account validation.
+     * Generate a signed JWT access token.
      */
     @Override
     public String generateAccessToken(
@@ -34,38 +33,65 @@ public class JwtServiceImpl implements JwtService {
             List<String> menus
     ) {
 
-        // Current timestamp in UTC.
-        Instant now = Instant.now();
+        // 1. Get the current UTC timestamp.
+        Instant now = Instant.now(clock);
 
-        // Read access token expiration from application.yml.
+        // 2. Calculate the access token expiration time.
         Instant expiresAt = now.plus(
                 jwtProperties.accessTokenExpiration()
         );
 
-        // Define JWT claims.
+        // 3. Build JWT claims.
         JwtClaimsSet claims = JwtClaimsSet.builder()
+
+                // Identify the trusted token issuer.
                 .issuer(jwtProperties.issuer())
+
+                // Set the authenticated username.
                 .subject(user.getUsername())
+
+                // Specify the intended audiences.
                 .audience(jwtProperties.audience())
+
+                // Set token creation time.
                 .issuedAt(now)
+
+                // Token becomes valid immediately.
                 .notBefore(now)
+
+                // Set the token expiration time.
                 .expiresAt(expiresAt)
+
+                // Assign a unique JWT identifier.
                 .id(UUID.randomUUID().toString())
+
+                // Add user information.
                 .claim("fullName", user.getSurename())
                 .claim("branchName", user.getBranchName())
                 .claim("groupLevel", user.getGroupLevel())
+
+                // Add authorized menus.
                 .claim("menus", menus)
+
                 .build();
 
-        // Define JWT header using RSA SHA-256.
+        // 4. Configure JWT header using RS256.
         JwsHeader header = JwsHeader
                 .with(SignatureAlgorithm.RS256)
                 .keyId(jwtProperties.keyId())
                 .build();
 
-        // Sign and encode the access token.
-        return jwtEncoder.encode(
-                JwtEncoderParameters.from(header, claims)
-        ).getTokenValue();
+        // 5. Combine the JWT header and claims.
+        JwtEncoderParameters parameters =
+                JwtEncoderParameters.from(
+                        header,
+                        claims
+                );
+
+        // 6. Sign the JWT using the configured private key.
+        return jwtEncoder
+                .encode(parameters)
+                .getTokenValue();
     }
+
 }
