@@ -33,20 +33,23 @@ Perintah tersebut menghasilkan:
 
 ```json
 {
-  "accessToken": "eyJhbGciOiJSUzI1NiJ9...",
-  "refreshToken": "secure-random-token",
-  "user": {
-    "username": "testuser",
-    "fullName": "Test User",
-    "branchName": "JKT-HO",
-    "status": "ACTIVE",
-    "groupLevel": "Support User",
-    "lastLogin": null,
-    "menus": [
-      "compliance_InquiryLiquidation",
-      "compliance_EditBreachDays"
-    ]
+  "httpStatus": 200,
+  "code": "SUCCESS",
+  "message": "Login successful",
+  "data": {
+    "access_token": "eyJhbGciOiJSUzI1NiJ9...",
+    "refresh_token": "secure-refresh-token",
+    "user": {
+      "username": "testuser",
+      "fullName": "Test User",
+      "branchName": "JKT-HO",
+      "status": "ACTIVE",
+      "groupLevel": "Support User",
+      "lastLogin": null,
+      "menus": [
+        "compliance_InquiryLiquidation"
+      ]
+    }
   }
 }
-
 ```
