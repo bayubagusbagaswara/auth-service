@@ -3,21 +3,20 @@ package com.custody.auth.service.impl;
 import com.custody.auth.config.JwtProperties;
 import com.custody.auth.dto.response.RefreshTokenResponse;
 import com.custody.auth.entity.RefreshTokenEntity;
-import com.custody.auth.entity.UserEntity;
 import com.custody.auth.exception.InvalidRefreshTokenException;
 import com.custody.auth.repository.RefreshTokenRepository;
-import com.custody.auth.repository.UserRepository;
 import com.custody.auth.service.RefreshTokenService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.time.Clock;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
@@ -27,148 +26,117 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class RefreshTokenServiceImpl implements RefreshTokenService {
 
-    private static final int TOKEN_BYTES = 32;
-
-    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    private static final SecureRandom SECURE_RANDOM =
+            new SecureRandom();
 
     private final RefreshTokenRepository refreshTokenRepository;
-    private final UserRepository userRepository;
     private final JwtProperties jwtProperties;
     private final TransactionTemplate transactionTemplate;
+    private final Clock clock;
 
+    public RefreshTokenServiceImpl(
+            RefreshTokenRepository refreshTokenRepository,
+            JwtProperties jwtProperties,
+            PlatformTransactionManager transactionManager,
+            Clock clock
+    ) {
+
+        this.refreshTokenRepository = refreshTokenRepository;
+        this.jwtProperties = jwtProperties;
+        this.transactionTemplate =
+                new TransactionTemplate(transactionManager);
+        this.clock = clock;
+    }
+
+    /**
+     * Create a new refresh token family for a user.
+     */
     @Override
     public RefreshTokenResponse createRefreshToken(String username) {
-        if (username == null || username.isBlank()) {
-            throw invalidToken();
-        }
 
         return transactionTemplate.execute(status -> {
 
-            // Retrieve the authenticated user.
-            UserEntity user = userRepository
-                    .findByUsername(username)
-                    .orElseThrow(this::invalidToken);
+            String familyId = UUID.randomUUID().toString();
 
-            // Reject inactive users.
-            if (!"ACTIVE".equalsIgnoreCase(user.getStatus())) {
-                throw invalidToken();
-            }
-
-            LocalDateTime now = nowUtc();
-
-            // Read expiration from application.yml.
-            LocalDateTime expiresAt = now.plus(
-                    jwtProperties.refreshTokenExpiration()
-            );
-
-            String rawToken = generateSecureToken();
-
-            // Store only the token hash.
-            RefreshTokenEntity entity = new RefreshTokenEntity();
-            entity.setUsername(user.getUsername());
-            entity.setTokenHash(hashToken(rawToken));
-            entity.setTokenFamilyId(UUID.randomUUID().toString());
-            entity.setCreatedAt(now);
-            entity.setExpiresAt(expiresAt);
-
-            refreshTokenRepository.save(entity);
-
-            return new RefreshTokenResponse(
-                    rawToken,
-                    user.getUsername(),
-                    expiresAt
-            );
+            return createToken(username, familyId);
         });
     }
 
+    /**
+     * Rotate an active refresh token.
+     * Reusing a previously rotated token revokes
+     * all tokens belonging to the same family.
+     */
     @Override
-    public RefreshTokenResponse rotateRefreshToken(String refreshToken) {
+    public RefreshTokenResponse rotateRefreshToken(
+            String refreshToken
+    ) {
+
         String tokenHash = hashToken(refreshToken);
 
-        // Commit token changes before returning
-        // an invalid-token exception.
-        RefreshTokenResponse response =
-                transactionTemplate.execute(status ->
-                        rotateWithinTransaction(tokenHash)
-                );
+        // Return a result instead of throwing inside
+        // the transaction when revocation must be committed.
+        RotationResult result = transactionTemplate.execute(status -> {
 
-        if (response == null) {
+            RefreshTokenEntity currentToken =
+                    refreshTokenRepository
+                            .findByTokenHashForUpdate(tokenHash)
+                            .orElseThrow(this::invalidToken);
+
+            LocalDateTime now = LocalDateTime.now(clock);
+
+            // Detect reuse of a previously revoked token.
+            if (currentToken.getRevokedAt() != null) {
+
+                // A previously rotated token being reused
+                // is treated as a possible session compromise.
+                if (currentToken.getReplacedByTokenId() != null) {
+                    revokeFamily(
+                            currentToken.getTokenFamilyId(),
+                            now
+                    );
+                }
+
+                return new RotationResult(null, false);
+            }
+
+            // Reject expired refresh tokens.
+            if (!currentToken.getExpiresAt().isAfter(now)) {
+                return new RotationResult(null, false);
+            }
+
+            // Create the replacement token in the same family.
+            RefreshTokenResponse replacement = createToken(
+                    currentToken.getUsername(),
+                    currentToken.getTokenFamilyId()
+            );
+
+            // Find the newly persisted replacement by its hash.
+            RefreshTokenEntity replacementEntity =
+                    refreshTokenRepository.findByTokenHash(
+                            hashToken(replacement.refreshToken())
+                    ).orElseThrow(this::invalidToken);
+
+            // Revoke the previous token and link its replacement.
+            currentToken.setRevokedAt(now);
+            currentToken.setReplacedByTokenId(
+                    replacementEntity.getId()
+            );
+
+            refreshTokenRepository.save(currentToken);
+
+            return new RotationResult(replacement, true);
+        });
+
+        if (result == null || !result.valid()) {
             throw invalidToken();
         }
 
-        return response;
+        return result.response();
     }
 
     /**
-     * Perform token rotation inside a transaction.
-     */
-    private RefreshTokenResponse rotateWithinTransaction(
-            String tokenHash
-    ) {
-        RefreshTokenEntity current = refreshTokenRepository
-                .findByTokenHashForUpdate(tokenHash)
-                .orElse(null);
-
-        if (current == null) {
-            return null;
-        }
-
-        LocalDateTime now = nowUtc();
-
-        // Detect reused or revoked tokens.
-        if (current.getRevokedAt() != null) {
-            revokeFamily(current.getTokenFamilyId(), now);
-            return null;
-        }
-
-        // Reject expired tokens.
-        if (!current.getExpiresAt().isAfter(now)) {
-            current.setRevokedAt(now);
-            return null;
-        }
-
-        // Verify the account is still active.
-        UserEntity user = userRepository
-                .findByUsername(current.getUsername())
-                .orElse(null);
-
-        if (user == null ||
-                !"ACTIVE".equalsIgnoreCase(user.getStatus())) {
-
-            revokeFamily(current.getTokenFamilyId(), now);
-            return null;
-        }
-
-        String newRawToken = generateSecureToken();
-
-        // Preserve the initial session expiration.
-        LocalDateTime expiresAt = current.getExpiresAt();
-
-        RefreshTokenEntity replacement =
-                new RefreshTokenEntity();
-
-        replacement.setUsername(current.getUsername());
-        replacement.setTokenHash(hashToken(newRawToken));
-        replacement.setTokenFamilyId(current.getTokenFamilyId());
-        replacement.setCreatedAt(now);
-        replacement.setExpiresAt(expiresAt);
-
-        replacement = refreshTokenRepository
-                .saveAndFlush(replacement);
-
-        // Mark the previous token as revoked.
-        current.setRevokedAt(now);
-        current.setReplacedByTokenId(replacement.getId());
-
-        return new RefreshTokenResponse(
-                newRawToken,
-                current.getUsername(),
-                expiresAt
-        );
-    }
-
-    /**
-     * Revoke the entire refresh token session.
+     * Revoke a refresh token family during logout.
      */
     @Override
     public void revokeRefreshToken(String refreshToken) {
@@ -177,59 +145,95 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
 
         transactionTemplate.executeWithoutResult(status -> {
 
-            RefreshTokenEntity current = refreshTokenRepository
-                    .findByTokenHashForUpdate(tokenHash)
-                    .orElse(null);
+            RefreshTokenEntity currentToken =
+                    refreshTokenRepository
+                            .findByTokenHashForUpdate(tokenHash)
+                            .orElseThrow(this::invalidToken);
 
-            if (current != null) {
-                revokeFamily(
-                        current.getTokenFamilyId(),
-                        nowUtc()
-                );
-            }
+            revokeFamily(
+                    currentToken.getTokenFamilyId(),
+                    LocalDateTime.now(clock)
+            );
         });
     }
 
     /**
-     * Revoke all active tokens in a token family.
-     *
-     * Must be executed inside a transaction.
+     * Generate and persist a new opaque refresh token.
+     */
+    private RefreshTokenResponse createToken(
+            String username,
+            String familyId
+    ) {
+
+        String rawToken = generateToken();
+        LocalDateTime now = LocalDateTime.now(clock);
+
+        LocalDateTime expiresAt = now.plus(
+                jwtProperties.refreshTokenExpiration()
+        );
+
+        RefreshTokenEntity entity = new RefreshTokenEntity();
+
+        entity.setUsername(username);
+        entity.setTokenHash(hashToken(rawToken));
+        entity.setTokenFamilyId(familyId);
+        entity.setCreatedAt(now);
+        entity.setExpiresAt(expiresAt);
+        entity.setRevokedAt(null);
+        entity.setReplacedByTokenId(null);
+
+        refreshTokenRepository.saveAndFlush(entity);
+
+        // Only return the raw token to the client.
+        // The database stores its hash.
+        return new RefreshTokenResponse(
+                rawToken,
+                username,
+                expiresAt
+        );
+    }
+
+    /**
+     * Revoke every active token in the given family.
      */
     private void revokeFamily(
             String familyId,
             LocalDateTime revokedAt
     ) {
+
         List<RefreshTokenEntity> tokens =
-                refreshTokenRepository.findByTokenFamilyId(
-                        familyId
-                );
+                refreshTokenRepository.findByTokenFamilyId(familyId);
 
         for (RefreshTokenEntity token : tokens) {
+
             if (token.getRevokedAt() == null) {
                 token.setRevokedAt(revokedAt);
             }
         }
+
+        refreshTokenRepository.saveAll(tokens);
     }
 
     /**
-     * Generate a cryptographically secure token.
+     * Generate a cryptographically secure random token.
      */
-    private String generateSecureToken() {
+    private String generateToken() {
 
-        byte[] bytes = new byte[TOKEN_BYTES];
-        SECURE_RANDOM.nextBytes(bytes);
+        byte[] randomBytes = new byte[32];
+
+        SECURE_RANDOM.nextBytes(randomBytes);
 
         return Base64.getUrlEncoder()
                 .withoutPadding()
-                .encodeToString(bytes);
+                .encodeToString(randomBytes);
     }
 
     /**
      * Hash a refresh token using SHA-256.
      */
-    private String hashToken(String rawToken) {
+    private String hashToken(String refreshToken) {
 
-        if (rawToken == null || rawToken.isBlank()) {
+        if (refreshToken == null || refreshToken.isBlank()) {
             throw invalidToken();
         }
 
@@ -238,31 +242,29 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
                     MessageDigest.getInstance("SHA-256");
 
             byte[] hash = digest.digest(
-                    rawToken.getBytes(StandardCharsets.UTF_8)
+                    refreshToken.getBytes(StandardCharsets.UTF_8)
             );
 
             return HexFormat.of().formatHex(hash);
 
-        } catch (NoSuchAlgorithmException e) {
+        } catch (NoSuchAlgorithmException ex) {
             throw new IllegalStateException(
-                    "SHA-256 algorithm is unavailable", e
+                    "SHA-256 algorithm is unavailable",
+                    ex
             );
         }
     }
 
-    /**
-     * Return current UTC timestamp.
-     */
-    private LocalDateTime nowUtc() {
-        return LocalDateTime.now(ZoneOffset.UTC);
-    }
-
-    /**
-     * Create a generic invalid token exception.
-     */
     private InvalidRefreshTokenException invalidToken() {
         return new InvalidRefreshTokenException(
                 "Invalid or expired refresh token"
         );
     }
+
+    private record RotationResult(
+            RefreshTokenResponse response,
+            boolean valid
+    ) {
+    }
+
 }
