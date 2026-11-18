@@ -27,8 +27,14 @@ public class SecurityConfig {
                         )
                 )
                 .authorizeHttpRequests(auth -> auth
-                        // Refresh and logout validate
-                        // the supplied refresh token.
+
+                        // Public JWKS endpoint.
+                        .requestMatchers(
+                                HttpMethod.GET,
+                                "/.well-known/jwks.json"
+                        ).permitAll()
+
+                        // Refresh and logout endpoints.
                         .requestMatchers(
                                 HttpMethod.POST,
                                 "/api/v1/auth/refresh",
