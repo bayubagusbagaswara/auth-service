@@ -53,3 +53,22 @@ Perintah tersebut menghasilkan:
   }
 }
 ```
+
+# Contoh request /me
+
+```bash
+
+const getCurrentUser = async (accessToken) => {
+    const response = await axios.get(
+        "http://localhost:8081/api/v1/auth/me",
+        {
+            headers: {
+                Authorization: `Bearer ${accessToken}`
+            }
+        }
+    );
+
+    return response.data;
+};
+
+```
