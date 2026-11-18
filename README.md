@@ -28,3 +28,25 @@ Perintah tersebut menghasilkan:
 - public.pem — memverifikasi tanda tangan JWT.
 
 - Format private key yang dihasilkan adalah PKCS#8, sesuai pembacaan kunci Java yang akan kita gunakan.
+
+# Response login
+
+```json
+{
+  "access_token": "eyJhbGciOiJSUzI1NiJ9...",
+  "refresh_token": "secure-random-token",
+  "user": {
+    "username": "testuser",
+    "fullName": "Test User",
+    "branchName": "JKT-HO",
+    "status": "ACTIVE",
+    "groupLevel": "Support User",
+    "lastLogin": null,
+    "menus": [
+      "compliance_InquiryLiquidation",
+      "compliance_EditBreachDays"
+    ]
+  }
+}
+
+```
