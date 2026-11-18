@@ -1,135 +1,228 @@
 package com.custody.auth.config;
 
+import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
-import com.nimbusds.jose.jwk.source.JWKSource;
 import com.nimbusds.jose.proc.SecurityContext;
+import org.jspecify.annotations.NonNull;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2Error;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
+import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
 import org.springframework.security.oauth2.jwt.*;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
+import java.security.NoSuchAlgorithmException;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
+import java.security.spec.InvalidKeySpecException;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
+import java.util.List;
+import java.util.Objects;
 
+/**
+ * Configuration for RSA-based JWT authentication.
+ * JWT signing algorithm: RS256
+ * Private Key:
+ * - Used to sign JWT access tokens.
+ * Public Key:
+ * - Used to validate JWT signatures.
+ * - Exposed through the JWKS endpoint.
+ */
 @Configuration
 public class JwtConfig {
 
     /**
-     * Load the RSA private key from a PEM file.
+     * Load the RSA private key from a PKCS#8 PEM file.
+     *
+     * @param properties JWT configuration properties
+     * @return RSA private key
      */
     @Bean
     public RSAPrivateKey rsaPrivateKey(
             JwtProperties properties
-    ) throws Exception {
+    ) throws IOException, GeneralSecurityException {
 
-        String pem = Files.readString(
-                Path.of(properties.privateKey()),
-                StandardCharsets.UTF_8
-        );
+        // Retrieve the configured private key path.
+        String privateKeyPath = properties.privateKey();
 
-        String privateKey = pem
+        // Read the private key PEM file.
+        String pem = readPemFile(privateKeyPath);
+
+        // Remove PEM headers, footers and whitespace.
+        String encodedKey = pem
                 .replace("-----BEGIN PRIVATE KEY-----", "")
                 .replace("-----END PRIVATE KEY-----", "")
                 .replaceAll("\\s", "");
 
-        byte[] decoded = Base64.getDecoder()
-                .decode(privateKey);
+        // Decode the Base64 content.
+        byte[] decodedKey = Base64.getDecoder()
+                .decode(encodedKey);
 
+        // Create the PKCS#8 private key specification.
         PKCS8EncodedKeySpec keySpec =
-                new PKCS8EncodedKeySpec(decoded);
+                new PKCS8EncodedKeySpec(decodedKey);
 
+        // Generate the RSA private key.
         KeyFactory keyFactory =
                 KeyFactory.getInstance("RSA");
 
-        return (RSAPrivateKey) keyFactory
-                .generatePrivate(keySpec);
+        return (RSAPrivateKey) keyFactory.generatePrivate(keySpec);
     }
 
     /**
-     * Load the RSA public key from a PEM file.
+     * Load the RSA public key from an X.509 PEM file.
+     *
+     * @param properties JWT configuration properties
+     * @return RSA public key
      */
     @Bean
-    public RSAPublicKey rsaPublicKey(
-            JwtProperties properties
-    ) throws Exception {
+    public RSAPublicKey rsaPublicKey(JwtProperties properties) throws IOException, NoSuchAlgorithmException, InvalidKeySpecException {
 
-        String pem = Files.readString(
-                Path.of(properties.publicKey()),
-                StandardCharsets.UTF_8
-        );
+        // Retrieve the configured public key path.
+        String publicKeyPath = properties.publicKey();
 
-        String publicKey = pem
+        // Read the public key PEM file.
+        String pem = readPemFile(publicKeyPath);
+
+        // Remove PEM headers, footers and whitespace.
+        String encodedKey = pem
                 .replace("-----BEGIN PUBLIC KEY-----", "")
                 .replace("-----END PUBLIC KEY-----", "")
                 .replaceAll("\\s", "");
 
-        byte[] decoded = Base64.getDecoder()
-                .decode(publicKey);
+        // Decode the Base64 content.
+        byte[] decodedKey = Base64.getDecoder()
+                .decode(encodedKey);
 
-        X509EncodedKeySpec keySpec =
-                new X509EncodedKeySpec(decoded);
+        // Create the X.509 public key specification.
+        X509EncodedKeySpec keySpec = new X509EncodedKeySpec(decodedKey);
 
-        KeyFactory keyFactory =
-                KeyFactory.getInstance("RSA");
+        // Generate the RSA public key.
+        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
 
-        return (RSAPublicKey) keyFactory
-                .generatePublic(keySpec);
+        return (RSAPublicKey) keyFactory.generatePublic(keySpec);
     }
 
-    /**
-     * Create a JWT encoder using the RSA key pair.
-     *
-     * The private key signs the JWT.
-     */
     @Bean
     public JwtEncoder jwtEncoder(
-            RSAPublicKey publicKey,
             RSAPrivateKey privateKey,
+            RSAPublicKey publicKey,
             JwtProperties properties
     ) {
 
+        // Build the RSA JSON Web Key.
         RSAKey rsaKey = new RSAKey.Builder(publicKey)
                 .privateKey(privateKey)
                 .keyID(properties.keyId())
                 .build();
 
-        JWKSource<SecurityContext> jwkSource =
-                new ImmutableJWKSet<>(
-                        new com.nimbusds.jose.jwk.JWKSet(rsaKey)
-                );
+        // Create the JSON Web Key Set.
+        JWKSet jwkSet = new JWKSet(rsaKey);
 
+        // Create an immutable JWK source.
+        ImmutableJWKSet<SecurityContext> jwkSource =
+                new ImmutableJWKSet<>(jwkSet);
+
+        // Create the Nimbus JWT encoder.
         return new NimbusJwtEncoder(jwkSource);
     }
 
-    /**
-     * Create a JWT decoder using the RSA public key.
-     *
-     * Validates signature, timestamps, and issuer.
-     */
     @Bean
     public JwtDecoder jwtDecoder(
             RSAPublicKey publicKey,
             JwtProperties properties
     ) {
 
+        // 1. Configure JWT decoding using RS256.
         NimbusJwtDecoder decoder = NimbusJwtDecoder
                 .withPublicKey(publicKey)
+                .signatureAlgorithm(SignatureAlgorithm.RS256)
                 .build();
 
-        decoder.setJwtValidator(
+        // 2. Configure standard JWT validation.
+        // This validates timestamps and the expected issuer.
+        OAuth2TokenValidator<@NonNull Jwt> defaultValidator =
                 JwtValidators.createDefaultWithIssuer(
                         properties.issuer()
-                )
-        );
+                );
+
+        // 3. Define audience validation directly
+        // without a separate JwtAudienceValidator class.
+        OAuth2TokenValidator<@NonNull Jwt> audienceValidator = jwt -> {
+
+            List<String> allowedAudiences = properties.audience();
+
+            // Reject tokens when no trusted audience
+            // has been configured.
+            if (allowedAudiences == null
+                    || allowedAudiences.isEmpty()) {
+
+                return OAuth2TokenValidatorResult.failure(
+                        new OAuth2Error(
+                                "invalid_token",
+                                "JWT audience configuration is missing",
+                                null
+                        )
+                );
+            }
+
+            // Verify that at least one JWT audience
+            // matches an allowed audience.
+            boolean valid = Objects.requireNonNull(jwt.getAudience())
+                    .stream()
+                    .anyMatch(allowedAudiences::contains);
+
+            if (valid) {
+                return OAuth2TokenValidatorResult.success();
+            }
+
+            // Reject tokens with an invalid audience.
+            return OAuth2TokenValidatorResult.failure(
+                    new OAuth2Error(
+                            "invalid_token",
+                            "Invalid JWT audience",
+                            null
+                    )
+            );
+        };
+
+        // 4. Combine standard and audience validators.
+        OAuth2TokenValidator<@NonNull Jwt> validator =
+                new DelegatingOAuth2TokenValidator<>(
+                        defaultValidator,
+                        audienceValidator
+                );
+
+        // 5. Register JWT claim validators.
+        decoder.setJwtValidator(validator);
 
         return decoder;
+    }
+
+
+    private String readPemFile(
+            String filePath
+    ) throws IOException {
+
+        // Resolve the configured key file path.
+        Path path = Path.of(filePath);
+
+        // Read PEM content.
+        return Files.readString(
+                path,
+                StandardCharsets.UTF_8
+        );
     }
 
 }
