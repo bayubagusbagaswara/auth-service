@@ -1,5 +1,6 @@
 package com.custody.auth.service.impl;
 
+import com.custody.auth.config.JwtProperties;
 import com.custody.auth.dto.response.RefreshTokenResponse;
 import com.custody.auth.entity.RefreshTokenEntity;
 import com.custody.auth.entity.UserEntity;
@@ -27,37 +28,42 @@ import java.util.UUID;
 public class RefreshTokenServiceImpl implements RefreshTokenService {
 
     private static final int TOKEN_BYTES = 32;
-    private static final int EXPIRATION_DAYS = 7;
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final RefreshTokenRepository refreshTokenRepository;
     private final UserRepository userRepository;
+    private final JwtProperties jwtProperties;
     private final TransactionTemplate transactionTemplate;
 
     @Override
     public RefreshTokenResponse createRefreshToken(String username) {
-
         if (username == null || username.isBlank()) {
             throw invalidToken();
         }
 
-        // Only callers that have authenticated the user
-        // may invoke this operation.
         return transactionTemplate.execute(status -> {
 
-            UserEntity user = userRepository.findByUsername(username).orElseThrow(this::invalidToken);
+            // Retrieve the authenticated user.
+            UserEntity user = userRepository
+                    .findByUsername(username)
+                    .orElseThrow(this::invalidToken);
 
+            // Reject inactive users.
             if (!"ACTIVE".equalsIgnoreCase(user.getStatus())) {
                 throw invalidToken();
             }
 
             LocalDateTime now = nowUtc();
-            LocalDateTime expiresAt =
-                    now.plusDays(EXPIRATION_DAYS);
+
+            // Read expiration from application.yml.
+            LocalDateTime expiresAt = now.plus(
+                    jwtProperties.refreshTokenExpiration()
+            );
 
             String rawToken = generateSecureToken();
 
+            // Store only the token hash.
             RefreshTokenEntity entity = new RefreshTokenEntity();
             entity.setUsername(user.getUsername());
             entity.setTokenHash(hashToken(rawToken));
@@ -77,45 +83,51 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
 
     @Override
     public RefreshTokenResponse rotateRefreshToken(String refreshToken) {
-
         String tokenHash = hashToken(refreshToken);
 
-        RotationResult result = transactionTemplate.execute(
-                status -> rotateWithinTransaction(tokenHash)
-        );
+        // Commit token changes before returning
+        // an invalid-token exception.
+        RefreshTokenResponse response =
+                transactionTemplate.execute(status ->
+                        rotateWithinTransaction(tokenHash)
+                );
 
-        if (result == null || result.response() == null) {
+        if (response == null) {
             throw invalidToken();
         }
 
-        return result.response();
+        return response;
     }
 
-    private RotationResult rotateWithinTransaction(String tokenHash) {
+    /**
+     * Perform token rotation inside a transaction.
+     */
+    private RefreshTokenResponse rotateWithinTransaction(
+            String tokenHash
+    ) {
         RefreshTokenEntity current = refreshTokenRepository
                 .findByTokenHashForUpdate(tokenHash)
                 .orElse(null);
 
         if (current == null) {
-            return new RotationResult(null);
+            return null;
         }
 
         LocalDateTime now = nowUtc();
 
-        // A revoked token indicates potential reuse.
-        // Revoke the entire token family.
+        // Detect reused or revoked tokens.
         if (current.getRevokedAt() != null) {
             revokeFamily(current.getTokenFamilyId(), now);
-            return new RotationResult(null);
+            return null;
         }
 
         // Reject expired tokens.
         if (!current.getExpiresAt().isAfter(now)) {
             current.setRevokedAt(now);
-            return new RotationResult(null);
+            return null;
         }
 
-        // Check if the user is still active.
+        // Verify the account is still active.
         UserEntity user = userRepository
                 .findByUsername(current.getUsername())
                 .orElse(null);
@@ -124,14 +136,12 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
                 !"ACTIVE".equalsIgnoreCase(user.getStatus())) {
 
             revokeFamily(current.getTokenFamilyId(), now);
-            return new RotationResult(null);
+            return null;
         }
 
-        // Generate a new random refresh token.
         String newRawToken = generateSecureToken();
 
-        // Preserve the original session expiration.
-        // Rotation does not extend the 7-day lifetime.
+        // Preserve the initial session expiration.
         LocalDateTime expiresAt = current.getExpiresAt();
 
         RefreshTokenEntity replacement =
@@ -139,54 +149,73 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
 
         replacement.setUsername(current.getUsername());
         replacement.setTokenHash(hashToken(newRawToken));
-        replacement.setTokenFamilyId(
-                current.getTokenFamilyId()
-        );
+        replacement.setTokenFamilyId(current.getTokenFamilyId());
         replacement.setCreatedAt(now);
         replacement.setExpiresAt(expiresAt);
 
-        // Save immediately to obtain the generated ID.
         replacement = refreshTokenRepository
                 .saveAndFlush(replacement);
 
-        // Revoke the previous token.
+        // Mark the previous token as revoked.
         current.setRevokedAt(now);
         current.setReplacedByTokenId(replacement.getId());
 
-        return new RotationResult(
-                new RefreshTokenResponse(
-                        newRawToken,
-                        current.getUsername(),
-                        expiresAt
-                )
+        return new RefreshTokenResponse(
+                newRawToken,
+                current.getUsername(),
+                expiresAt
         );
     }
 
+    /**
+     * Revoke the entire refresh token session.
+     */
     @Override
     public void revokeRefreshToken(String refreshToken) {
 
         String tokenHash = hashToken(refreshToken);
 
         transactionTemplate.executeWithoutResult(status -> {
-            refreshTokenRepository
-                    .findByTokenHashForUpdate(tokenHash).ifPresent(current -> revokeFamily(
-                            current.getTokenFamilyId(),
-                            nowUtc()
-                    ));
 
+            RefreshTokenEntity current = refreshTokenRepository
+                    .findByTokenHashForUpdate(tokenHash)
+                    .orElse(null);
+
+            if (current != null) {
+                revokeFamily(
+                        current.getTokenFamilyId(),
+                        nowUtc()
+                );
+            }
         });
     }
 
-    private void revokeFamily(String familyId, LocalDateTime revokedAt) {
-        List<RefreshTokenEntity> family = refreshTokenRepository.findByTokenFamilyId(familyId);
-        for (RefreshTokenEntity token : family) {
+    /**
+     * Revoke all active tokens in a token family.
+     *
+     * Must be executed inside a transaction.
+     */
+    private void revokeFamily(
+            String familyId,
+            LocalDateTime revokedAt
+    ) {
+        List<RefreshTokenEntity> tokens =
+                refreshTokenRepository.findByTokenFamilyId(
+                        familyId
+                );
+
+        for (RefreshTokenEntity token : tokens) {
             if (token.getRevokedAt() == null) {
                 token.setRevokedAt(revokedAt);
             }
         }
     }
 
+    /**
+     * Generate a cryptographically secure token.
+     */
     private String generateSecureToken() {
+
         byte[] bytes = new byte[TOKEN_BYTES];
         SECURE_RANDOM.nextBytes(bytes);
 
@@ -195,6 +224,9 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
                 .encodeToString(bytes);
     }
 
+    /**
+     * Hash a refresh token using SHA-256.
+     */
     private String hashToken(String rawToken) {
 
         if (rawToken == null || rawToken.isBlank()) {
@@ -218,19 +250,19 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
         }
     }
 
-
+    /**
+     * Return current UTC timestamp.
+     */
     private LocalDateTime nowUtc() {
         return LocalDateTime.now(ZoneOffset.UTC);
     }
 
+    /**
+     * Create a generic invalid token exception.
+     */
     private InvalidRefreshTokenException invalidToken() {
         return new InvalidRefreshTokenException(
                 "Invalid or expired refresh token"
         );
-    }
-
-    private record RotationResult(
-            RefreshTokenResponse response
-    ) {
     }
 }
