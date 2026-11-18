@@ -33,8 +33,8 @@ Perintah tersebut menghasilkan:
 
 ```json
 {
-  "access_token": "eyJhbGciOiJSUzI1NiJ9...",
-  "refresh_token": "secure-random-token",
+  "accessToken": "eyJhbGciOiJSUzI1NiJ9...",
+  "refreshToken": "secure-random-token",
   "user": {
     "username": "testuser",
     "fullName": "Test User",
