@@ -38,6 +38,7 @@ app:
     access-token-expiration: 15m
     refresh-token-expiration: 7d
     audience:
+      - auth-service
       - billing-service
       - core-service
       - hiport-service
