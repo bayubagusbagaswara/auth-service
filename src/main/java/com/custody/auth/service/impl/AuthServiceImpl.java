@@ -10,13 +10,11 @@ import com.custody.auth.service.AuthService;
 import com.custody.auth.service.JwtService;
 import com.custody.auth.service.RefreshTokenService;
 import com.custody.auth.service.UserService;
-import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
-@RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
     private final UserRepository userRepository;
     private final UserService userService;
