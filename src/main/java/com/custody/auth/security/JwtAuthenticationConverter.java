@@ -1,12 +1,13 @@
 package com.custody.auth.security;
 
+import org.jspecify.annotations.NonNull;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.security.authentication.AbstractAuthenticationToken;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
 
 @Component
-public class JwtAuthenticationConverter implements Converter<Jwt, AbstractAuthenticationToken> {
+public class JwtAuthenticationConverter implements Converter<@NonNull Jwt, AbstractAuthenticationToken> {
 
     private final org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter delegate;
 
