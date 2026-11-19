@@ -17,47 +17,59 @@ import org.springframework.security.web.SecurityFilterChain;
 @EnableMethodSecurity
 @RequiredArgsConstructor
 public class SecurityConfig {
-
     private final JwtAuthenticationConverter jwtAuthenticationConverter;
     private final CustomAuthenticationEntryPoint authenticationEntryPoint;
     private final CustomAccessDeniedHandler accessDeniedHandler;
 
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) {
+    public SecurityFilterChain securityFilterChain(
+            HttpSecurity http
+    ) throws Exception {
 
         http
-                // Disable CSRF for stateless bearer-token APIs.
-                .csrf(AbstractHttpConfigurer::disable) // CSRF protections should not be disabled
+                // Disable CSRF for explicit Bearer Token authentication.
+                // This assumes authentication does not use cookies.
+                .csrf(AbstractHttpConfigurer::disable)
 
-                // Disable browser-based authentication.
+                // Disable browser-based authentication mechanisms.
                 .httpBasic(AbstractHttpConfigurer::disable)
                 .formLogin(AbstractHttpConfigurer::disable)
 
-                // Do not create HTTP sessions.
+                // Use stateless session management.
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(
                                 SessionCreationPolicy.STATELESS
                         )
                 )
 
-
-                // Configure endpoint access.
+                // Configure endpoint access rules.
                 .authorizeHttpRequests(auth -> auth
+
                         // Public JWKS endpoint.
-                        .requestMatchers(HttpMethod.GET, "/.well-known/jwks.json").permitAll()
+                        .requestMatchers(
+                                HttpMethod.GET,
+                                "/.well-known/jwks.json"
+                        ).permitAll()
+
                         // Authentication endpoints.
-                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/logout").permitAll()
-                        // Other endpoints require authentication.
+                        .requestMatchers(
+                                HttpMethod.POST,
+                                "/api/v1/auth/login",
+                                "/api/v1/auth/refresh",
+                                "/api/v1/auth/logout"
+                        ).permitAll()
+
+                        // Require authentication for other endpoints.
                         .anyRequest().authenticated()
                 )
 
-                // Handle authorization and authentication errors.
+                // Configure authentication and authorization errors.
                 .exceptionHandling(exception -> exception
                         .authenticationEntryPoint(authenticationEntryPoint)
                         .accessDeniedHandler(accessDeniedHandler)
                 )
 
-                // Configure JWT authentication and bearer errors.
+                // Configure OAuth2 Resource Server with JWT.
                 .oauth2ResourceServer(oauth2 -> oauth2
                         .authenticationEntryPoint(authenticationEntryPoint)
                         .accessDeniedHandler(accessDeniedHandler)
