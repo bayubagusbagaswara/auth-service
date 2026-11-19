@@ -1,9 +1,6 @@
 package com.custody.auth.entity;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
+import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -16,13 +13,14 @@ import lombok.Setter;
 public class MenuAccessEntity {
 
     @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "id", nullable = false)
     private Long id;
 
     @Column(name = "groupName", length = 100, nullable = false)
     private String groupName;
 
-    @Column(name = "menuName", length = 150, nullable = false)
+    @Column(name = "menuName", length = 255, nullable = false)
     private String menuName;
 
 }

@@ -7,27 +7,27 @@ import lombok.Setter;
 
 import java.time.LocalDateTime;
 
-/**
- * Entity representing the CSAUSERS table.
- * Stores user information, account status,
- * branch information, and access group.
- */
 @Entity
 @Table(name = "csa_users")
 @Getter
 @Setter
 @NoArgsConstructor
 public class UserEntity {
-
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "username", length = 64, nullable = false)
+    @Column(name = "username", length = 64, nullable = false, unique = true)
     private String username;
 
-    @Column(name = "surename", length = 150)
+    @Column(name = "surename", length = 255)
     private String surename;
+
+    @Column(name = "password", length = 255)
+    private String password;
+
+    @Column(name = "passwordExpired", length = 50)
+    private String passwordExpired;
 
     @Column(name = "branchName", length = 100)
     private String branchName;
@@ -44,13 +44,13 @@ public class UserEntity {
     @Column(name = "groupLevel", length = 100)
     private String groupLevel;
 
-    @Column(name = "notes", length = 255)
+    @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
 
     @Column(name = "appStatus", length = 30)
     private String appStatus;
 
-    @Column(name = "firstLogin", length = 30)
+    @Column(name = "firstLogin", length = 10)
     private String firstLogin;
 
     @Column(name = "invalidLog")
