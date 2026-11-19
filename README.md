@@ -302,3 +302,39 @@ openssl genpkey -algorithm RSA -out private.pem -pkeyopt rsa_keygen_bits:3072
 # Generate Public Key dari Private Key
 openssl pkey -in private.pem -pubout -out public.pem
 ```
+
+# Contoh konfigurasi billing-service
+
+Di application-sit.yml milik Billing Service:
+
+```yaml
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://auth-sit.example.internal
+          jwk-set-uri: https://auth-sit.example.internal/.well-known/jwks.json
+```
+
+Selanjutnya, pada Billing Service kita perlu mengonfigurasi validator audience billing-service dan mapping claim menus menjadi authorities.
+
+Ketika menerima request dengan JWT, Billing Service akan:
+
+1. Membaca JWT dari header Authorization: Bearer.
+2. Mengambil Public Key dari JWKS jika belum tersedia dalam cache.
+3. Memverifikasi signature JWT secara lokal.
+4. Memvalidasi issuer, masa berlaku, dan audience.
+5. Memeriksa permission dari claim menus.
+
+**Billing Service tidak perlu menghubungi Auth Service untuk setiap request**. Komunikasi ke JWKS diperlukan ketika memperoleh atau memperbarui Public Key.
+
+4. Bagaimana jika Auth Service sedang down?
+   Jika Billing Service sudah memiliki Public Key yang valid dalam cache, JWT masih bisa diverifikasi secara lokal selama key tersebut tersedia dalam cache dan token masih valid.
+
+Namun, jika Public Key belum tersedia, cache kedaluwarsa, atau terjadi rotasi key yang membutuhkan pengambilan ulang JWKS, validasi bisa gagal saat Auth Service tidak dapat dihubungi.
+
+
+Kesimpulannya: Dengan arsitektur kita, cukup auth-service yang menyimpan pasangan RSA Key. Service lainnya hanya membutuhkan konfigurasi URL JWKS dan dapat memvalidasi JWT secara independen menggunakan Public Key yang diperoleh dari sana.
+
+Ini merupakan salah satu keuntungan utama penggunaan JWT RS256 + JWKS dalam arsitektur microservices.
