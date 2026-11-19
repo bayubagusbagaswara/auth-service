@@ -1,10 +1,8 @@
 package com.custody.auth.service.impl;
 
 import com.custody.auth.dto.response.UserResponse;
-import com.custody.auth.entity.MenuAccessEntity;
 import com.custody.auth.entity.UserEntity;
 import com.custody.auth.exception.ResourceNotFoundException;
-import com.custody.auth.repository.MenuAccessRepository;
 import com.custody.auth.repository.UserRepository;
 import com.custody.auth.service.MenuAccessService;
 import com.custody.auth.service.UserService;
@@ -19,14 +17,13 @@ import java.util.List;
 public class UserServiceImpl implements UserService {
 
     private final UserRepository userRepository;
-
     private final MenuAccessService menuAccessService;
 
     @Override
     @Transactional(readOnly = true)
     public UserResponse getUserByUsername(String username) {
 
-        // Find user in CSAUSERS.
+        // Find user in csa_users
         UserEntity user = userRepository.findByUsername(username)
                 .orElseThrow(() ->
                         new ResourceNotFoundException(

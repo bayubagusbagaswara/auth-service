@@ -10,124 +10,93 @@ import com.custody.auth.service.AuthService;
 import com.custody.auth.service.JwtService;
 import com.custody.auth.service.RefreshTokenService;
 import com.custody.auth.service.UserService;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
-
 @Service
+@RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
+
     private final UserRepository userRepository;
     private final UserService userService;
     private final JwtService jwtService;
     private final RefreshTokenService refreshTokenService;
-    private final TransactionTemplate transactionTemplate;
-
-    public AuthServiceImpl(
-            UserRepository userRepository,
-            UserService userService,
-            JwtService jwtService,
-            RefreshTokenService refreshTokenService,
-            PlatformTransactionManager transactionManager
-    ) {
-        this.userRepository = userRepository;
-        this.userService = userService;
-        this.jwtService = jwtService;
-        this.refreshTokenService = refreshTokenService;
-        this.transactionTemplate =
-                new TransactionTemplate(transactionManager);
-    }
 
     /**
-     * Rotate refresh token and issue a new JWT
-     * within a single database transaction.
+     * Rotate a refresh token and generate a new JWT.
+     *
+     * Refresh token persistence is managed by
+     * RefreshTokenServiceImpl.
      */
     @Override
     public AuthResponse refreshToken(String refreshToken) {
 
-        AuthResponse result = transactionTemplate.execute(status -> {
+        // 1. Validate and rotate the refresh token.
+        // The service manages its own transaction.
+        RefreshTokenResponse rotatedToken =
+                refreshTokenService.rotateRefreshToken(refreshToken);
 
-            RefreshTokenResponse rotatedToken;
-
-            try {
-                // Validate the existing refresh token,
-                // verify user status and rotate it.
-                rotatedToken = refreshTokenService
-                        .rotateRefreshToken(refreshToken);
-
-            } catch (InvalidRefreshTokenException ex) {
-
-                // Return normally so security-related
-                // revocations can be committed.
-                return null;
-            }
-
-            // Retrieve the current user.
-            UserEntity user = userRepository
-                    .findByUsername(rotatedToken.username())
-                    .orElseThrow(this::invalidRefreshToken);
-
-            // Recheck user status before issuing the JWT.
-            if (!"ACTIVE".equalsIgnoreCase(user.getStatus())) {
-                throw invalidRefreshToken();
-            }
-
-            // Retrieve the latest user profile and permissions.
-            UserResponse userResponse =
-                    userService.getUserByUsername(user.getUsername());
-
-            // Generate a new signed JWT access token.
-            String accessToken = jwtService.generateAccessToken(
-                    user,
-                    userResponse.menus()
-            );
-
-            // Return the result after database operations.
-            return new AuthResponse(
-                    accessToken,
-                    rotatedToken.refreshToken(),
-                    userResponse
-            );
-        });
-
-        // Reject unsuccessful refresh attempts.
-        if (result == null) {
-            throw invalidRefreshToken();
-        }
-
-        return result;
-    }
-
-    /**
-     * Revoke the refresh token session.
-     */
-    @Override
-    public void logout(String refreshToken) {
-
-        refreshTokenService.revokeRefreshToken(refreshToken);
-    }
-
-    /**
-     * Retrieve information about the authenticated user.
-     */
-    @Override
-    public UserResponse getCurrentUser(String username) {
-
-        // Verify that the user is still registered.
+        // 2. Retrieve the current user.
         UserEntity user = userRepository
-                .findByUsername(username)
+                .findByUsername(rotatedToken.username())
                 .orElseThrow(this::invalidRefreshToken);
 
-        // Reject inactive user accounts.
+        // 3. Verify that the user is still active.
         if (!"ACTIVE".equalsIgnoreCase(user.getStatus())) {
             throw invalidRefreshToken();
         }
 
-        // Retrieve user information and current permissions.
+        // 4. Retrieve the latest user information
+        // and menu permissions.
+        UserResponse userResponse =
+                userService.getUserByUsername(user.getUsername());
+
+        // 5. Generate a new signed JWT access token.
+        String accessToken = jwtService.generateAccessToken(
+                user,
+                userResponse.menus()
+        );
+
+        // 6. Build the authentication response.
+        return new AuthResponse(
+                accessToken,
+                rotatedToken.refreshToken(),
+                userResponse
+        );
+    }
+
+    /**
+     * Revoke a refresh token session.
+     */
+    @Override
+    public void logout(String refreshToken) {
+
+        // Revoke the refresh token family.
+        refreshTokenService.revokeRefreshToken(refreshToken);
+    }
+
+    /**
+     * Retrieve the currently authenticated user's information.
+     */
+    @Override
+    public UserResponse getCurrentUser(String username) {
+
+        // 1. Find the registered user.
+        UserEntity user = userRepository
+                .findByUsername(username)
+                .orElseThrow(this::invalidRefreshToken);
+
+        // 2. Verify that the account is active.
+        if (!"ACTIVE".equalsIgnoreCase(user.getStatus())) {
+            throw invalidRefreshToken();
+        }
+
+        // 3. Return the current user information
+        // and menu permissions.
         return userService.getUserByUsername(username);
     }
 
     /**
-     * Return a generic invalid session exception.
+     * Create a generic invalid session exception.
      */
     private InvalidRefreshTokenException invalidRefreshToken() {
 
