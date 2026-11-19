@@ -3,12 +3,13 @@ package com.custody.auth.service.impl;
 import com.custody.auth.config.JwtProperties;
 import com.custody.auth.dto.response.RefreshTokenResponse;
 import com.custody.auth.entity.RefreshTokenEntity;
+import com.custody.auth.entity.UserEntity;
 import com.custody.auth.exception.InvalidRefreshTokenException;
 import com.custody.auth.repository.RefreshTokenRepository;
+import com.custody.auth.repository.UserRepository;
 import com.custody.auth.service.RefreshTokenService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
@@ -30,23 +31,11 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
             new SecureRandom();
 
     private final RefreshTokenRepository refreshTokenRepository;
+    private final UserRepository userRepository;
     private final JwtProperties jwtProperties;
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
 
-    public RefreshTokenServiceImpl(
-            RefreshTokenRepository refreshTokenRepository,
-            JwtProperties jwtProperties,
-            PlatformTransactionManager transactionManager,
-            Clock clock
-    ) {
-
-        this.refreshTokenRepository = refreshTokenRepository;
-        this.jwtProperties = jwtProperties;
-        this.transactionTemplate =
-                new TransactionTemplate(transactionManager);
-        this.clock = clock;
-    }
 
     /**
      * Create a new refresh token family for a user.
@@ -67,29 +56,30 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
      * Reusing a previously rotated token revokes
      * all tokens belonging to the same family.
      */
+
     @Override
     public RefreshTokenResponse rotateRefreshToken(
             String refreshToken
     ) {
 
+        // Calculate the SHA-256 hash of the provided token.
         String tokenHash = hashToken(refreshToken);
 
-        // Return a result instead of throwing inside
-        // the transaction when revocation must be committed.
         RotationResult result = transactionTemplate.execute(status -> {
 
-            RefreshTokenEntity currentToken =
-                    refreshTokenRepository
-                            .findByTokenHashForUpdate(tokenHash)
-                            .orElseThrow(this::invalidToken);
+            // Lock the existing token record to prevent
+            // concurrent rotation of the same refresh token.
+            RefreshTokenEntity currentToken = refreshTokenRepository
+                    .findByTokenHashForUpdate(tokenHash)
+                    .orElseThrow(this::invalidToken);
 
             LocalDateTime now = LocalDateTime.now(clock);
 
             // Detect reuse of a previously revoked token.
             if (currentToken.getRevokedAt() != null) {
 
-                // A previously rotated token being reused
-                // is treated as a possible session compromise.
+                // Revoke the entire family if this token
+                // had already been replaced.
                 if (currentToken.getReplacedByTokenId() != null) {
                     revokeFamily(
                             currentToken.getTokenFamilyId(),
@@ -97,28 +87,51 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
                     );
                 }
 
+                // Return failure without throwing here so
+                // family revocation can be committed.
                 return new RotationResult(null, false);
             }
 
-            // Reject expired refresh tokens.
+            // Reject expired tokens.
             if (!currentToken.getExpiresAt().isAfter(now)) {
                 return new RotationResult(null, false);
             }
 
-            // Create the replacement token in the same family.
+            // Retrieve the token owner from CSAUSERS.
+            UserEntity user = userRepository
+                    .findByUsername(currentToken.getUsername())
+                    .orElse(null);
+
+            // Do not issue new tokens to inactive
+            // or deleted users.
+            if (user == null
+                    || !"ACTIVE".equalsIgnoreCase(user.getStatus())) {
+
+                revokeFamily(
+                        currentToken.getTokenFamilyId(),
+                        now
+                );
+
+                return new RotationResult(null, false);
+            }
+
+            // Create a replacement refresh token
+            // belonging to the same token family.
             RefreshTokenResponse replacement = createToken(
                     currentToken.getUsername(),
                     currentToken.getTokenFamilyId()
             );
 
-            // Find the newly persisted replacement by its hash.
+            // Retrieve the persisted replacement record.
             RefreshTokenEntity replacementEntity =
                     refreshTokenRepository.findByTokenHash(
                             hashToken(replacement.refreshToken())
                     ).orElseThrow(this::invalidToken);
 
-            // Revoke the previous token and link its replacement.
+            // Revoke the previous refresh token.
             currentToken.setRevokedAt(now);
+
+            // Record the replacement relationship.
             currentToken.setReplacedByTokenId(
                     replacementEntity.getId()
             );
@@ -128,6 +141,7 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
             return new RotationResult(replacement, true);
         });
 
+        // Throw only after the transaction has completed.
         if (result == null || !result.valid()) {
             throw invalidToken();
         }
@@ -135,21 +149,31 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
         return result.response();
     }
 
+
     /**
      * Revoke a refresh token family during logout.
      */
+
     @Override
     public void revokeRefreshToken(String refreshToken) {
 
+        // 1. Generate SHA-256 hash from the provided refresh token.
         String tokenHash = hashToken(refreshToken);
 
+        // 2. Execute token revocation within a database transaction.
         transactionTemplate.executeWithoutResult(status -> {
 
-            RefreshTokenEntity currentToken =
-                    refreshTokenRepository
-                            .findByTokenHashForUpdate(tokenHash)
-                            .orElseThrow(this::invalidToken);
+            // 3. Find and lock the refresh token record.
+            RefreshTokenEntity currentToken = refreshTokenRepository
+                    .findByTokenHashForUpdate(tokenHash)
+                    .orElse(null);
 
+            // 4. Stop processing if the token does not exist.
+            if (currentToken == null) {
+                return;
+            }
+
+            // 5. Revoke all active tokens in the same family.
             revokeFamily(
                     currentToken.getTokenFamilyId(),
                     LocalDateTime.now(clock)
