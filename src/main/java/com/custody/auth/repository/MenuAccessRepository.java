@@ -1,13 +1,14 @@
 package com.custody.auth.repository;
 
 import com.custody.auth.entity.MenuAccessEntity;
+import org.jspecify.annotations.NonNull;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
 
 @Repository
-public interface MenuAccessRepository extends JpaRepository<MenuAccessEntity, Long> {
+public interface MenuAccessRepository extends JpaRepository<@NonNull MenuAccessEntity, @NonNull Long> {
 
     List<MenuAccessEntity> findByGroupName(String groupName);
 
