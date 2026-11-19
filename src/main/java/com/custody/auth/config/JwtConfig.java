@@ -1,5 +1,6 @@
 package com.custody.auth.config;
 
+import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
@@ -39,7 +40,6 @@ import java.util.Base64;
  */
 @Configuration
 public class JwtConfig {
-
     /**
      * Load the RSA private key from a PKCS#8 PEM file.
      *
@@ -51,27 +51,27 @@ public class JwtConfig {
             JwtProperties properties
     ) throws IOException, GeneralSecurityException {
 
-        // Retrieve the configured private key path.
+        // 1. Retrieve the configured private key path.
         String privateKeyPath = properties.privateKey();
 
-        // Read the private key PEM file.
+        // 2. Read the private key PEM file.
         String pem = readPemFile(privateKeyPath);
 
-        // Remove PEM headers, footers and whitespace.
+        // 3. Remove PEM headers, footers and whitespace.
         String encodedKey = pem
                 .replace("-----BEGIN PRIVATE KEY-----", "")
                 .replace("-----END PRIVATE KEY-----", "")
                 .replaceAll("\\s", "");
 
-        // Decode the Base64 content.
+        // 4. Decode the Base64 content.
         byte[] decodedKey = Base64.getDecoder()
                 .decode(encodedKey);
 
-        // Create the PKCS#8 private key specification.
+        // 5. Create the PKCS#8 private key specification.
         PKCS8EncodedKeySpec keySpec =
                 new PKCS8EncodedKeySpec(decodedKey);
 
-        // Generate the RSA private key.
+        // 6. Generate the RSA private key.
         KeyFactory keyFactory =
                 KeyFactory.getInstance("RSA");
 
@@ -85,33 +85,45 @@ public class JwtConfig {
      * @return RSA public key
      */
     @Bean
-    public RSAPublicKey rsaPublicKey(JwtProperties properties) throws IOException, NoSuchAlgorithmException, InvalidKeySpecException {
+    public RSAPublicKey rsaPublicKey(
+            JwtProperties properties
+    ) throws IOException, NoSuchAlgorithmException, InvalidKeySpecException {
 
-        // Retrieve the configured public key path.
+        // 1. Retrieve the configured public key path.
         String publicKeyPath = properties.publicKey();
 
-        // Read the public key PEM file.
+        // 2. Read the public key PEM file.
         String pem = readPemFile(publicKeyPath);
 
-        // Remove PEM headers, footers and whitespace.
+        // 3. Remove PEM headers, footers and whitespace.
         String encodedKey = pem
                 .replace("-----BEGIN PUBLIC KEY-----", "")
                 .replace("-----END PUBLIC KEY-----", "")
                 .replaceAll("\\s", "");
 
-        // Decode the Base64 content.
+        // 4. Decode the Base64 content.
         byte[] decodedKey = Base64.getDecoder()
                 .decode(encodedKey);
 
-        // Create the X.509 public key specification.
-        X509EncodedKeySpec keySpec = new X509EncodedKeySpec(decodedKey);
+        // 5. Create the X.509 public key specification.
+        X509EncodedKeySpec keySpec =
+                new X509EncodedKeySpec(decodedKey);
 
-        // Generate the RSA public key.
-        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+        // 6. Generate the RSA public key.
+        KeyFactory keyFactory =
+                KeyFactory.getInstance("RSA");
 
         return (RSAPublicKey) keyFactory.generatePublic(keySpec);
     }
 
+    /**
+     * Configure JWT signing using the RSA private key.
+     *
+     * @param privateKey RSA private key
+     * @param publicKey RSA public key
+     * @param properties JWT configuration properties
+     * @return JWT encoder
+     */
     @Bean
     public JwtEncoder jwtEncoder(
             RSAPrivateKey privateKey,
@@ -119,23 +131,37 @@ public class JwtConfig {
             JwtProperties properties
     ) {
 
-        // Build the RSA JSON Web Key.
+        // 1. Build the RSA JSON Web Key.
         RSAKey rsaKey = new RSAKey.Builder(publicKey)
                 .privateKey(privateKey)
                 .keyID(properties.keyId())
+                .algorithm(JWSAlgorithm.RS256)
                 .build();
 
-        // Create the JSON Web Key Set.
+        // 2. Create the JSON Web Key Set.
         JWKSet jwkSet = new JWKSet(rsaKey);
 
-        // Create an immutable JWK source.
+        // 3. Create an immutable JWK source.
         ImmutableJWKSet<SecurityContext> jwkSource =
                 new ImmutableJWKSet<>(jwkSet);
 
-        // Create the Nimbus JWT encoder.
+        // 4. Create the Nimbus JWT encoder.
         return new NimbusJwtEncoder(jwkSource);
     }
 
+    /**
+     * Configure JWT verification using the RSA public key.
+     * Validations:
+     * - RS256 signature
+     * - Issuer
+     * - Expiration
+     * - Not-before
+     * - Audience
+     *
+     * @param publicKey RSA public key
+     * @param properties JWT configuration properties
+     * @return JWT decoder
+     */
     @Bean
     public JwtDecoder jwtDecoder(
             RSAPublicKey publicKey,
@@ -149,7 +175,7 @@ public class JwtConfig {
                 .build();
 
         // 2. Configure standard JWT validation.
-        // Validates issuer, expiration, and not-before claims.
+        // Validates issuer, expiration and not-before claims.
         OAuth2TokenValidator<@NonNull Jwt> defaultValidator =
                 JwtValidators.createDefaultWithIssuer(
                         properties.issuer()
@@ -158,7 +184,7 @@ public class JwtConfig {
         // 3. Validate the required auth-service audience.
         OAuth2TokenValidator<@NonNull Jwt> audienceValidator = jwt -> {
 
-            // Check whether the token is intended for auth-service.
+            // Check whether this token is intended for auth-service.
             boolean valid = jwt.getAudience() != null
                     && jwt.getAudience().contains("auth-service");
 
@@ -176,28 +202,34 @@ public class JwtConfig {
             );
         };
 
-        // 4. Combine default and audience validators.
+        // 4. Combine standard and audience validators.
         OAuth2TokenValidator<@NonNull Jwt> validator =
                 new DelegatingOAuth2TokenValidator<>(
                         defaultValidator,
                         audienceValidator
                 );
 
-        // 5. Register the validators.
+        // 5. Register JWT validators.
         decoder.setJwtValidator(validator);
 
         return decoder;
     }
 
-
+    /**
+     * Read a PEM file from the configured file system path.
+     *
+     * @param filePath path to PEM file
+     * @return PEM file content
+     * @throws IOException if the PEM file cannot be read
+     */
     private String readPemFile(
             String filePath
     ) throws IOException {
 
-        // Resolve the configured key file path.
+        // 1. Resolve the configured key file path.
         Path path = Path.of(filePath);
 
-        // Read PEM content.
+        // 2. Read the PEM file using UTF-8.
         return Files.readString(
                 path,
                 StandardCharsets.UTF_8
