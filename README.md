@@ -72,3 +72,15 @@ const getCurrentUser = async (accessToken) => {
 };
 
 ```
+
+# 4. Contoh penggunaan pada backend service
+Misalnya, nanti pada billing-service, kita memiliki endpoint:
+
+```java
+@PreAuthorize("hasAuthority('compliance_InquiryLiquidation')")
+@GetMapping("/liquidation")
+public ResponseEntity<?> getLiquidation() {
+    // Business logic
+    return ResponseEntity.ok().build();
+}
+```
