@@ -27,8 +27,6 @@ import java.security.spec.InvalidKeySpecException;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
-import java.util.List;
-import java.util.Objects;
 
 /**
  * Configuration for RSA-based JWT authentication.
@@ -144,50 +142,31 @@ public class JwtConfig {
             JwtProperties properties
     ) {
 
-        // 1. Configure JWT decoding using RS256.
+        // 1. Configure RS256 signature verification.
         NimbusJwtDecoder decoder = NimbusJwtDecoder
                 .withPublicKey(publicKey)
                 .signatureAlgorithm(SignatureAlgorithm.RS256)
                 .build();
 
         // 2. Configure standard JWT validation.
-        // This validates timestamps and the expected issuer.
+        // Validates issuer, expiration, and not-before claims.
         OAuth2TokenValidator<@NonNull Jwt> defaultValidator =
                 JwtValidators.createDefaultWithIssuer(
                         properties.issuer()
                 );
 
-        // 3. Define audience validation directly
-        // without a separate JwtAudienceValidator class.
+        // 3. Validate the required auth-service audience.
         OAuth2TokenValidator<@NonNull Jwt> audienceValidator = jwt -> {
 
-            List<String> allowedAudiences = properties.audience();
-
-            // Reject tokens when no trusted audience
-            // has been configured.
-            if (allowedAudiences == null
-                    || allowedAudiences.isEmpty()) {
-
-                return OAuth2TokenValidatorResult.failure(
-                        new OAuth2Error(
-                                "invalid_token",
-                                "JWT audience configuration is missing",
-                                null
-                        )
-                );
-            }
-
-            // Verify that at least one JWT audience
-            // matches an allowed audience.
-            boolean valid = Objects.requireNonNull(jwt.getAudience())
-                    .stream()
-                    .anyMatch(allowedAudiences::contains);
+            // Check whether the token is intended for auth-service.
+            boolean valid = jwt.getAudience() != null
+                    && jwt.getAudience().contains("auth-service");
 
             if (valid) {
                 return OAuth2TokenValidatorResult.success();
             }
 
-            // Reject tokens with an invalid audience.
+            // Reject tokens without the required audience.
             return OAuth2TokenValidatorResult.failure(
                     new OAuth2Error(
                             "invalid_token",
@@ -197,14 +176,14 @@ public class JwtConfig {
             );
         };
 
-        // 4. Combine standard and audience validators.
+        // 4. Combine default and audience validators.
         OAuth2TokenValidator<@NonNull Jwt> validator =
                 new DelegatingOAuth2TokenValidator<>(
                         defaultValidator,
                         audienceValidator
                 );
 
-        // 5. Register JWT claim validators.
+        // 5. Register the validators.
         decoder.setJwtValidator(validator);
 
         return decoder;
