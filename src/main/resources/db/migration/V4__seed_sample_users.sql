@@ -1,6 +1,7 @@
 
--- Seed sample users for development.
--- Existing table: CSAUSERS
+-- =========================================================
+-- V4: Seed Sample Users
+-- =========================================================
 
 INSERT INTO csa_users (
     username,
@@ -21,10 +22,10 @@ VALUES
     'System Administrator',
     'JKT-HO',
     'ACTIVE',
-    UTC_TIMESTAMP(),
+    UTC_TIMESTAMP(6),
     NULL,
     'ADMIN',
-    'Sample administrator',
+    'Sample administrator account',
     'ACTIVE',
     'Y',
     0
@@ -34,10 +35,10 @@ VALUES
     'Development User',
     'JKT-HO',
     'ACTIVE',
-    UTC_TIMESTAMP(),
+    UTC_TIMESTAMP(6),
     NULL,
     'SUPPORT',
-    'Sample support user',
+    'Sample developer account',
     'ACTIVE',
     'Y',
     0
@@ -47,10 +48,10 @@ VALUES
     'Custody Operator',
     'JKT-HO',
     'ACTIVE',
-    UTC_TIMESTAMP(),
+    UTC_TIMESTAMP(6),
     NULL,
     'OPERATOR',
-    'Sample operator',
+    'Sample operator account',
     'ACTIVE',
     'Y',
     0
@@ -60,10 +61,10 @@ VALUES
     'Inactive User',
     'JKT-HO',
     'INACTIVE',
-    UTC_TIMESTAMP(),
+    UTC_TIMESTAMP(6),
     NULL,
     'OPERATOR',
-    'Sample inactive user',
+    'Sample inactive account',
     'INACTIVE',
     'Y',
     0
