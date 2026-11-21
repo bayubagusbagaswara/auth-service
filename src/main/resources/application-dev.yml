@@ -1,0 +1,16 @@
+
+server:
+  port: 8081
+
+spring:
+  datasource:
+    url:  ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+
+app:
+  jwt:
+    issuer: http://localhost:8081
+    key-id: auth-rsa-1
+    private-key: ${JWT_PRIVATE_KEY_PATH}
+    public-key: ${JWT_PUBLIC_KEY_PATH}
