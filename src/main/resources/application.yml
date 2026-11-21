@@ -40,8 +40,8 @@ app:
   jwt:
     issuer: http://localhost:8081
     key-id: auth-rsa-1
-    private-key: jwt-keys/private.pem
-    public-key: jwt-keys/public.pem
+    private-key: ${JWT_PRIVATE_KEY_PATH}
+    public-key: ${JWT_PUBLIC_KEY_PATH}
     access-token-expiration: 15m
     refresh-token-expiration: 7d
     audience:
