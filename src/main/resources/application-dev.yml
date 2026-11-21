@@ -14,3 +14,12 @@ app:
     key-id: auth-rsa-1
     private-key: ${JWT_PRIVATE_KEY_PATH}
     public-key: ${JWT_PUBLIC_KEY_PATH}
+
+  ldap:
+    host: ${LDAP_HOST:localhost}
+    port: ${LDAP_PORT:636}
+    connect-timeout-ms: 5000
+    read-timeout-ms: 5000
+
+    diagnostics:
+      enabled: ${LDAP_DIAGNOSTICS_ENABLED:false}
