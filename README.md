@@ -338,3 +338,74 @@ Namun, jika Public Key belum tersedia, cache kedaluwarsa, atau terjadi rotasi ke
 Kesimpulannya: Dengan arsitektur kita, cukup auth-service yang menyimpan pasangan RSA Key. Service lainnya hanya membutuhkan konfigurasi URL JWKS dan dapat memvalidasi JWT secara independen menggunakan Public Key yang diperoleh dari sana.
 
 Ini merupakan salah satu keuntungan utama penggunaan JWT RS256 + JWKS dalam arsitektur microservices.
+
+# Skenario Pengujian LDAP
+
+## Test Case 01 — TCP Connectivity
+```bash
+GET http://localhost:8081/api/v1/dev/ldap/connectivity
+```
+Authorization: Bearer ACCESS_TOKEN_ADMIN
+
+Body: Tidak diperlukan.
+
+Expected Response — HTTP 200
+```json
+{
+  "test": "TCP_CONNECTION",
+  "success": true,
+  "code": "CONNECTION_SUCCESS",
+  "message": "LDAP TCP connection successful"
+}
+```
+Jika success: true, artinya koneksi TCP berhasil. Ini belum membuktikan bahwa LDAP authentication atau TLS berhasil.
+
+## Test Case 02 — LDAPS TLS Connection
+```bash
+GET http://localhost:8081/api/v1/dev/ldap/tls
+```
+
+Authorization: Bearer ACCESS_TOKEN_ADMIN
+
+Body: Tidak diperlukan.
+
+Expected Response — HTTP 200
+
+```json
+{
+  "test": "LDAPS_TLS",
+  "success": true,
+  "code": "CONNECTION_SUCCESS",
+  "message": "LDAPS TLS verification successful"
+}
+```
+
+## Test Case 03 — LDAP Authentication
+
+```bash
+POST http://localhost:8081/api/v1/dev/ldap/authenticate
+```
+
+Authorization: Bearer ACCESS_TOKEN_ADMIN
+
+Headers: Content-Type: application/json
+
+Body → raw → JSON
+
+```json
+{
+  "username": "{{LDAP_TEST_USERNAME}}",
+  "password": "{{LDAP_TEST_PASSWORD}}"
+}
+```
+
+Expected Response — HTTP 200
+```json
+{
+  "test": "LDAP_AUTHENTICATION",
+  "success": true,
+  "code": "CONNECTION_SUCCESS",
+  "message": "LDAP authentication successful"
+}
+```
+
