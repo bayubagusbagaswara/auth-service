@@ -21,10 +21,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
-import java.security.NoSuchAlgorithmException;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
-import java.security.spec.InvalidKeySpecException;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
@@ -40,11 +38,21 @@ import java.util.Base64;
  */
 @Configuration
 public class JwtConfig {
+    private static final String RSA_ALGORITHM = "RSA";
+
+    private static final String PRIVATE_KEY_TYPE = "PRIVATE KEY";
+
+    private static final String PUBLIC_KEY_TYPE = "PUBLIC KEY";
+
+    private static final String REQUIRED_AUDIENCE = "auth-service";
+
     /**
-     * Load the RSA private key from a PKCS#8 PEM file.
+     * Load an RSA private key from a PKCS#8 PEM file.
      *
      * @param properties JWT configuration properties
      * @return RSA private key
+     * @throws IOException if the key file cannot be read
+     * @throws GeneralSecurityException if the key is invalid
      */
     @Bean
     public RSAPrivateKey rsaPrivateKey(
@@ -57,37 +65,38 @@ public class JwtConfig {
         // 2. Read the private key PEM file.
         String pem = readPemFile(privateKeyPath);
 
-        // 3. Remove PEM headers, footers and whitespace.
-        String encodedKey = pem
-                .replace("-----BEGIN PRIVATE KEY-----", "")
-                .replace("-----END PRIVATE KEY-----", "")
-                .replaceAll("\\s", "");
+        // 3. Decode the PKCS#8 PEM content.
+        byte[] decodedKey = decodePemKey(
+                pem,
+                PRIVATE_KEY_TYPE
+        );
 
-        // 4. Decode the Base64 content.
-        byte[] decodedKey = Base64.getDecoder()
-                .decode(encodedKey);
-
-        // 5. Create the PKCS#8 private key specification.
+        // 4. Create the PKCS#8 private key specification.
         PKCS8EncodedKeySpec keySpec =
                 new PKCS8EncodedKeySpec(decodedKey);
 
-        // 6. Generate the RSA private key.
+        // 5. Initialize the RSA key factory.
         KeyFactory keyFactory =
-                KeyFactory.getInstance("RSA");
+                KeyFactory.getInstance(RSA_ALGORITHM);
 
-        return (RSAPrivateKey) keyFactory.generatePrivate(keySpec);
+        // 6. Generate and return the RSA private key.
+        return (RSAPrivateKey) keyFactory.generatePrivate(
+                keySpec
+        );
     }
 
     /**
-     * Load the RSA public key from an X.509 PEM file.
+     * Load an RSA public key from an X.509 PEM file.
      *
      * @param properties JWT configuration properties
      * @return RSA public key
+     * @throws IOException if the key file cannot be read
+     * @throws GeneralSecurityException if the key is invalid
      */
     @Bean
     public RSAPublicKey rsaPublicKey(
             JwtProperties properties
-    ) throws IOException, NoSuchAlgorithmException, InvalidKeySpecException {
+    ) throws IOException, GeneralSecurityException {
 
         // 1. Retrieve the configured public key path.
         String publicKeyPath = properties.publicKey();
@@ -95,29 +104,27 @@ public class JwtConfig {
         // 2. Read the public key PEM file.
         String pem = readPemFile(publicKeyPath);
 
-        // 3. Remove PEM headers, footers and whitespace.
-        String encodedKey = pem
-                .replace("-----BEGIN PUBLIC KEY-----", "")
-                .replace("-----END PUBLIC KEY-----", "")
-                .replaceAll("\\s", "");
+        // 3. Decode the X.509 PEM content.
+        byte[] decodedKey = decodePemKey(
+                pem,
+                PUBLIC_KEY_TYPE
+        );
 
-        // 4. Decode the Base64 content.
-        byte[] decodedKey = Base64.getDecoder()
-                .decode(encodedKey);
+        // 4. Create the X.509 public key specification.
+        X509EncodedKeySpec keySpec = new X509EncodedKeySpec(decodedKey);
 
-        // 5. Create the X.509 public key specification.
-        X509EncodedKeySpec keySpec =
-                new X509EncodedKeySpec(decodedKey);
-
-        // 6. Generate the RSA public key.
+        // 5. Initialize the RSA key factory.
         KeyFactory keyFactory =
-                KeyFactory.getInstance("RSA");
+                KeyFactory.getInstance(RSA_ALGORITHM);
 
-        return (RSAPublicKey) keyFactory.generatePublic(keySpec);
+        // 6. Generate and return the RSA public key.
+        return (RSAPublicKey) keyFactory.generatePublic(
+                keySpec
+        );
     }
 
     /**
-     * Configure JWT signing using the RSA private key.
+     * Configure JWT signing using RS256.
      *
      * @param privateKey RSA private key
      * @param publicKey RSA public key
@@ -156,7 +163,7 @@ public class JwtConfig {
      * - Issuer
      * - Expiration
      * - Not-before
-     * - Audience
+     * - Required audience
      *
      * @param publicKey RSA public key
      * @param properties JWT configuration properties
@@ -175,32 +182,34 @@ public class JwtConfig {
                 .build();
 
         // 2. Configure standard JWT validation.
-        // Validates issuer, expiration and not-before claims.
         OAuth2TokenValidator<@NonNull Jwt> defaultValidator =
                 JwtValidators.createDefaultWithIssuer(
                         properties.issuer()
                 );
 
-        // 3. Validate the required auth-service audience.
-        OAuth2TokenValidator<@NonNull Jwt> audienceValidator = jwt -> {
+        // 3. Validate the required Auth Service audience.
+        OAuth2TokenValidator<@NonNull Jwt> audienceValidator =
+                jwt -> {
 
-            // Check whether this token is intended for auth-service.
-            boolean valid = jwt.getAudience() != null
-                    && jwt.getAudience().contains("auth-service");
+                    // Verify that the token is intended
+                    // for Auth Service.
+                    boolean valid = jwt.getAudience() != null
+                            && jwt.getAudience()
+                            .contains(REQUIRED_AUDIENCE);
 
-            if (valid) {
-                return OAuth2TokenValidatorResult.success();
-            }
+                    if (valid) {
+                        return OAuth2TokenValidatorResult.success();
+                    }
 
-            // Reject tokens without the required audience.
-            return OAuth2TokenValidatorResult.failure(
-                    new OAuth2Error(
-                            "invalid_token",
-                            "Invalid JWT audience",
-                            null
-                    )
-            );
-        };
+                    // Reject tokens with an invalid audience.
+                    return OAuth2TokenValidatorResult.failure(
+                            new OAuth2Error(
+                                    "invalid_token",
+                                    "Invalid JWT audience",
+                                    null
+                            )
+                    );
+                };
 
         // 4. Combine standard and audience validators.
         OAuth2TokenValidator<@NonNull Jwt> validator =
@@ -209,24 +218,75 @@ public class JwtConfig {
                         audienceValidator
                 );
 
-        // 5. Register JWT validators.
+        // 5. Register the JWT validators.
         decoder.setJwtValidator(validator);
 
         return decoder;
     }
 
     /**
-     * Read a PEM file from the configured file system path.
+     * Decode a PEM-formatted RSA key.
+     * Supports:
+     * - PKCS#8 private keys
+     * - X.509 public keys
+     * PEM boundaries are constructed dynamically
+     * instead of using complete literal markers.
      *
-     * @param filePath path to PEM file
+     * @param pem PEM-formatted key content
+     * @param keyType expected PEM key type
+     * @return decoded DER key bytes
+     */
+    private byte[] decodePemKey(
+            String pem,
+            String keyType
+    ) {
+
+        // 1. Construct the PEM boundary markers.
+        String delimiter = "-".repeat(5);
+
+        String header =
+                delimiter + "BEGIN " + keyType + delimiter;
+
+        String footer =
+                delimiter + "END " + keyType + delimiter;
+
+        // 2. Remove leading and trailing whitespace.
+        String normalizedPem = pem.strip();
+
+        // 3. Validate the expected PEM boundaries.
+        if (!normalizedPem.startsWith(header)
+                || !normalizedPem.endsWith(footer)) {
+
+            throw new IllegalArgumentException(
+                    "Invalid PEM format for " + keyType
+            );
+        }
+
+        // 4. Extract the Base64 content.
+        String encodedKey = normalizedPem.substring(
+                header.length(),
+                normalizedPem.length() - footer.length()
+        );
+
+        // 5. Remove all whitespace from Base64 content.
+        encodedKey = encodedKey.replaceAll("\\s+", "");
+
+        // 6. Decode Base64 into DER-encoded key bytes.
+        return Base64.getDecoder().decode(encodedKey);
+    }
+
+    /**
+     * Read a PEM file from the configured filesystem path.
+     *
+     * @param filePath path to the PEM file
      * @return PEM file content
-     * @throws IOException if the PEM file cannot be read
+     * @throws IOException if the file cannot be read
      */
     private String readPemFile(
             String filePath
     ) throws IOException {
 
-        // 1. Resolve the configured key file path.
+        // 1. Resolve the configured file path.
         Path path = Path.of(filePath);
 
         // 2. Read the PEM file using UTF-8.
